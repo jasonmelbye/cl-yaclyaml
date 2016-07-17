@@ -807,3 +807,87 @@ omitted value:,\n: omitted key,'':'',\n}"))))
 	       (with-open-file (stream path :direction :output :if-exists :supersede)
 		 (write-sequence *config-string* stream))
 	       (yaml-load-file path :size-limit 2 :on-size-exceed nil)))))
+
+;;; Tests for custom schema
+
+(defclass invoice-schema (core-schema) ()
+  (:documentation "YMAL schema that can parse the invoice document from the YAML spec"))
+
+(defclass invoice ()
+  ((id :initarg :id :accessor invoice-id)
+   (date :initarg :date :accessor invoice-date)
+   (bill-to :initarg :bill-to :accessor invoice-bill-to)
+   (ship-to :initarg :ship-to :accessor invoice-ship-to)
+   (product :initarg :product :accessor invoice-product)
+   (tax :initarg :tax :accessor invoice-tax)
+   (total :initarg :total :accessor invoice-total)
+   (comments :initarg :comments :accessor invoice-comments))
+  (:documentation "Class to represent the invoice structure from Example 2.27 
+from the YAML 1.2 spec"))
+
+(defun invoice-converter (content)
+  "Content is a hashtable of name/value entries. Return an invoice instance"
+  (make-instance 'invoice
+		 :id (gethash "invoice" content)
+		 :date (gethash "date" content)
+		 :bill-to (gethash "bill-to" content)
+		 :ship-to (gethash "ship-to" content)
+		 :product (gethash "product" content)
+		 :tax (gethash "tax" content)
+		 :total (gethash "total" content)
+		 :comments (gethash "comments" content)))
+
+(defmethod install-converters progn ((schema invoice-schema))
+  (install-mapping-hashtable-converter "tag:clarkevans.com,2002:invoice"
+				       #'invoice-converter))
+
+(register-schema :invoice 'invoice-schema)
+
+(defparameter *invoice-yaml*
+  "--- !<tag:clarkevans.com,2002:invoice>
+invoice: 34843
+date   : 2001-01-23
+bill-to: &id001
+    given  : Chris
+    family : Dumars
+    address:
+        lines: |
+            458 Walkman Dr.
+            Suite #292
+        city    : Royal Oak
+        state   : MI
+        postal  : 48046
+ship-to: *id001
+product:
+    - sku         : BL394D
+      quantity    : 4
+      description : Basketball
+      price       : 450.00
+    - sku         : BL4438H
+      quantity    : 1
+      description : Super Hoop
+      price       : 2392.00
+tax  : 251.42
+total: 4443.52
+comments:
+    Late afternoon is best.
+    Backup contact is Nancy
+    Billsmer @ 338-4338.")
+
+(test load-with-custom-schema
+  (let ((invoice (yaml-simple-load *invoice-yaml* :schema :invoice)))
+    (is (equal (type-of invoice) 'invoice))
+    (is (equal (invoice-id invoice) 34843))
+    (is (equal (invoice-date invoice) "2001-01-23"))
+    (let ((bill-to (invoice-bill-to invoice)))
+      (is (equal (type-of bill-to) 'hash-table))
+      (is (equal (gethash "given" bill-to) "Chris"))
+      (is (equal (gethash "family" bill-to) "Dumars"))
+      (is (equal (type-of (gethash "address" bill-to)) 'hash-table))
+      (is (eq (invoice-ship-to invoice) bill-to)))
+    (is (consp (invoice-product invoice)))
+    (is (equal (length (invoice-product invoice)) 2))
+    (is (equal (invoice-tax invoice) 251.42))
+    (is (equal (invoice-total invoice) 4443.52))
+    (is (equal (invoice-comments  invoice)
+	       "Late afternoon is best. Backup contact is Nancy Billsmer @ 338-4338."))))
